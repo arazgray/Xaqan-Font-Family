@@ -1,40 +1,75 @@
 #!/usr/bin/env python3
-# Add South Azerbaijani (azb) letters to Vazir-Code:
-#   ۆ U+06C6, ۇ U+06C7, ؤ U+0624, ؽ U+063D, ݣ U+0763
-# including every contextual form (isolated / initial / medial / final)
-# plus GSUB init / medi / fina rules so text shapes correctly.
-#
-# Usage:
-#   fontforge -lang=py -script add_azb_chars.py [input.sfd] [output.ttf]
-#
-# Presentation forms (Unicode standard):
-#   ۆ (U+06C6 OE):   isolated U+FBD9, final U+FBDA   (non-connecting)
-#   ۇ (U+06C7 U):    isolated U+FBD7, final U+FBD8   (non-connecting)
-#   ؤ (U+0624):      isolated U+FE85, final U+FE86   (non-connecting, pre-existing)
-#   ؽ (U+063D):      unencoded init/medi/fina glyphs (no standard presentation forms)
-#   ݣ (U+0763):      unencoded init/medi/fina glyphs (no standard presentation forms)
-#
-# Placeholder strategy (fine-tune the small marks afterwards):
-#   ۆ ۇ  -> own base shapes (already in the font); final forms already exist
-#   ؤ    -> already works via the و + hamza ligature
-#   ؽ    -> base from Noto Naskh (like add_063D.py); contextual forms from ی
-#   ݣ    -> base + contextual forms from ک
-import fontforge, sys, re
+"""
+Add South Azerbaijani (azb) letters to any Arabic-script font:
+    ۆ U+06C6, ۇ U+06C7, ؤ U+0624, ؽ U+063D, ݣ U+0763
+including every contextual form (isolated / initial / medial / final)
+plus GSUB init / medi / fina rules so text shapes correctly.
 
-SRC = sys.argv[1] if len(sys.argv) > 1 else "dist/Vazir-Code.sfd"
-OUT = sys.argv[2] if len(sys.argv) > 2 else "dist/Vazir-Code.ttf"
-DONOR = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"
-MONO_WIDTH = 500
+Usage:
+  fontforge -lang=py -script add_azb_chars.py <input> [output] [donor]
 
-FINASUB = "'fina' Terminal Forms in Arabic lookup 0 subtable"
-INITSUB = "'init' Initial Forms in Arabic lookup 2 subtable"
-MEDISUB = "'medi' Medial Forms in Arabic lookup 1 subtable"
+  input : any font FontForge can open (.sfd, .ttf, .otf, ...)
+  output: default = <input base>-azb.<ext>  (.ttf when input is .sfd)
+  donor : optional font used only to supply a base glyph when the input
+          font lacks the closest letters (e.g. Noto Naskh Arabic)
 
-f = fontforge.open(SRC)
-print(f"opened {SRC}: {len(list(f.glyphs()))} glyphs")
+Placeholder strategy (fine-tune the small marks afterwards):
+    ۆ ۇ ؤ <- the font's own و      ݣ <- the font's own ک      ؽ <- the font's own ی
+Any of these letters already present in the input font are kept as-is.
+
+Standard presentation forms (for direct codepoint access and for shaping
+engines that fall back to them):
+    ۆ (U+06C6): isolated U+FBD9, final U+FBDA
+    ۇ (U+06C7): isolated U+FBD7, final U+FBD8
+    ؤ (U+0624): isolated U+FE85, final U+FE86
+    ؽ (U+063D) / ݣ (U+0763): no presentation forms -> unencoded .init/.medi/.fina
+"""
+import fontforge, sys, os, re, tempfile
+
+# ---------------- arguments ----------------
+src = sys.argv[1] if len(sys.argv) > 1 else "dist/Vazir-Code.sfd"
+in_ext = os.path.splitext(src)[1].lower()
+if len(sys.argv) > 2:
+    out = sys.argv[2]
+else:
+    out_ext = ".ttf" if in_ext == ".sfd" else (in_ext or ".ttf")
+    out = os.path.splitext(src)[0] + "-azb" + out_ext
+donor_path = sys.argv[3] if len(sys.argv) > 3 else None
+
+# ---------------- sources for the closest letters ----------------
+# role -> (unicode candidates, glyph-name candidates)
+WAW = ((0x0648,), ("uni0648", "waw", "afii57441", "uni0648.fina"))
+KAF = ((0x06A9, 0x0643), ("uni06A9", "uni0643", "keheh", "kaf", "afii57440"))
+YEH = ((0x06CC, 0x064A), ("uni06CC", "uni064A", "farsiyeh", "yeh", "afii57534"))
+# contextual forms of the closest letters (used for ؽ / ݣ)
+YEH_FORMS = {"init": ((0xFBFE,), ("uniFBFE",)),
+             "medi": ((0xFBFF,), ("uniFBFF",)),
+             "fina": ((0xFBFD,), ("uniFBFD",))}
+KAF_FORMS = {"init": ((0xFB90,), ("uniFB90",)),
+             "medi": ((0xFB91,), ("uniFB91",)),
+             "fina": ((0xFB8F,), ("uniFB8F",))}
+FORMS_TABLE = {"yeh": YEH_FORMS, "kaf": KAF_FORMS}
+
+# letter specs
+LETTERS = [
+    # ۆ -- non-connecting: isolated + final
+    dict(cp=0x06C6, name="uni06C6", src="waw",
+         forms=((0xFBD9, "uniFBD9"), (0xFBDA, "uniFBDA"))),
+    # ۇ -- non-connecting
+    dict(cp=0x06C7, name="uni06C7", src="waw",
+         forms=((0xFBD7, "uniFBD7"), (0xFBD8, "uniFBD8"))),
+    # ؤ -- non-connecting
+    dict(cp=0x0624, name="uni0624", src="waw",
+         forms=((0xFE85, "uniFE85"), (0xFE86, "uniFE86"))),
+    # ؽ -- connecting: init/medi/fina from ی
+    dict(cp=0x063D, name="uni063D", src="yeh", connecting=True, forms_src="yeh"),
+    # ݣ -- connecting: init/medi/fina from ک
+    dict(cp=0x0763, name="uni0763", src="kaf", connecting=True, forms_src="kaf"),
+]
 
 
-def exists(name):
+# ---------------- helpers ----------------
+def exists(f, name):
     try:
         f[name]
         return True
@@ -42,156 +77,225 @@ def exists(name):
         return False
 
 
-def copy_outlines(dst_name, src_name):
+def glyph_by_cp(f, cp):
+    try:
+        return f[cp].glyphname
+    except (TypeError, ValueError):
+        return None
+
+
+def find_glyph(f, cps=(), names=()):
+    for cp in cps:
+        n = glyph_by_cp(f, cp)
+        if n:
+            return n
+    for nm in names:
+        if exists(f, nm):
+            return nm
+    return None
+
+
+def copy_outlines(f, dst, src):
     f.selection.none()
-    f.selection.select(("more", None), src_name)
+    f.selection.select(("more", None), src)
     f.copy()
     f.selection.none()
-    f.selection.select(("more", None), dst_name)
+    f.selection.select(("more", None), dst)
     f.paste()
     f.selection.none()
 
 
-def create_from(name, unicode, src_name, force=False):
-    """create glyph `name` (mapped to `unicode`, or unencoded if None) as a copy of src outlines"""
-    if exists(name):
-        if force:
-            f.removeGlyph(f[name])
-        else:
-            g = f[name]
-            if unicode is not None:
-                g.unicode = unicode
-            g.width = MONO_WIDTH
-            return g
-    f.createChar(unicode if unicode is not None else -1, name)
-    copy_outlines(name, src_name)
-    print(f"created {name} U+{unicode:04X}" if unicode else f"created {name} (unencoded)")
-    g = f[name]
-    if unicode is not None:
-        g.unicode = unicode
-    g.width = MONO_WIDTH
-    return g
-
-
-def copy_anchors(dst_name, src_name):
-    dst = f[dst_name]
-    n = 0
-    for ap in f[src_name].anchorPoints:
+def copy_from(f, donor, dst, local_src, donor_cp):
+    """copy outlines into dst from local_src (this font) or donor[donor_cp]"""
+    if local_src:
+        copy_outlines(f, dst, local_src)
+    elif donor:
         try:
-            if len(ap) >= 4:
-                dst.addAnchorPoint(ap[0], ap[1], ap[2], ap[3])
-                n += 1
+            g = donor[donor_cp]
+            donor.selection.none()
+            donor.selection.select(("more", None), g.glyphname)
+            donor.copy()
+            f.selection.none()
+            f.selection.select(("more", None), dst)
+            f.paste()
+            f.selection.none()
+            return "donor"
+        except (TypeError, ValueError):
+            return None
+    return local_src
+
+
+def find_arabic_lookup(f, feature):
+    """return (lookup_name, subtable_name) for the feature, or (None, None)"""
+    for lk in f.gsub_lookups:
+        try:
+            info = f.getLookupInfo(lk)
         except Exception:
-            pass
-    if n:
-        print(f"copied {n} anchors to {dst_name}")
+            continue
+        feats = info[2] if len(info) > 2 else ()
+        for ftag, _scripts in feats:
+            if ftag == feature:
+                subs = f.getLookupSubtables(lk)
+                if subs:
+                    return lk, subs[0]
+    return None, None
 
 
-# ---------- ۆ U+06C6 (non-connecting: only isolated + final forms) ----------
-# base uni06C6 exists; final form uniFBDA (U+FBDA) already exists in the font
-create_from("uniFBD9", 0xFBD9, "uni06C6", force=True)  # isolated presentation form
-# remove glyphs wrongly created by earlier script versions (wrong codepoints)
-for nm in ["uniFBDB", "uniFBDC", "uniFBDD", "uniFBDE"]:
-    if exists(nm):
-        f.removeGlyph(f[nm])
-        print(f"removed wrong glyph {nm}")
+def detect_width(f):
+    for cp in (0x06CC, 0x0648, 0x0627, 0x0633, 0x0020):
+        n = glyph_by_cp(f, cp)
+        if n and f[n].width > 0:
+            return f[n].width
+    return 500
 
-# ---------- ۇ U+06C7 (non-connecting: only isolated + final forms) ----------
-# base uni06C7 exists; final form uniFBD8 (U+FBD8) already exists
-create_from("uniFBD7", 0xFBD7, "uni06C7", force=True)  # isolated presentation form
-f["uniFBD8"].width = MONO_WIDTH
-f["uniFBDA"].width = MONO_WIDTH
 
-# ---------- ؽ U+063D: base from Noto Naskh; contextual forms from ی ----------
-if not exists("uni063D"):
-    f.createChar(0x063D, "uni063D")
-    donor = fontforge.open(DONOR)
-    donor.selection.select(("more", None), "uni063D")
-    donor.copy()
-    f.selection.none()
-    f.selection.select(("more", None), "uni063D")
-    f.paste()
-    donor.close()
-    print("copied base outlines from Noto Naskh uni063D")
-    bbox = f["uni063D"].boundingBox()
-    gw = bbox[2] - bbox[0]
-    if gw > 0:
-        sx = (MONO_WIDTH - 40) / gw
-        cx_before = (bbox[0] + bbox[2]) / 2.0
-        dx = MONO_WIDTH / 2.0 - cx_before * sx
-        f["uni063D"].transform((sx, 0, 0, 1, dx, 0))
-        print(f"scaled base X by {sx:.3f}")
-g = f["uni063D"]
-g.unicode = 0x063D
-g.width = MONO_WIDTH
-copy_anchors("uni063D", "uni06CC")
-create_from("uni063D.init", None, "uniFBFE")
-create_from("uni063D.medi", None, "uniFBFF")
-create_from("uni063D.fina", None, "uniFBFD")
+# ---------------- main ----------------
+def main():
+    donor = fontforge.open(donor_path) if donor_path else None
+    work = tempfile.NamedTemporaryFile(suffix=".sfd", delete=False).name
 
-# ---------- ݣ U+0763: base + contextual forms from ک ----------
-create_from("uni0763", 0x0763, "uni06A9")
-copy_anchors("uni0763", "uni06A9")
-create_from("uni0763.init", None, "uniFB90")
-create_from("uni0763.medi", None, "uniFB91")
-create_from("uni0763.fina", None, "uniFB8F")
+    try:
+        f = fontforge.open(src)
+        f.save(work)
+        f.close()
+        f = fontforge.open(work)
+        print(f"opened {src}: {len(list(f.glyphs()))} glyphs")
 
-# ---------- fix GDEF glyph classes ----------
-# uni06C6 carries "mark" anchors, which makes FontForge classify it as a MARK
-# (GDEF class 3) in the generated TTF. The Arabic init/medi/fina lookups carry
-# the IgnoreMarks flag, so HarfBuzz skips ۆ during shaping. Force it to BASE.
-for nm in ["uni06C6", "uni06C7", "uni063D", "uni0763",
-           "uniFBD7", "uniFBD8", "uniFBD9", "uniFBDA"]:
-    if exists(nm):
-        try:
-            f[nm].glyphclass = "baseglyph"
-        except Exception as e:
-            print(f"glyphclass set failed for {nm}: {e}")
+        width = detect_width(f)
+        print(f"reference width: {width}")
 
-# ---------- hinting for new glyphs ----------
-new_glyphs = ["uniFBD9", "uniFBD7",
-              "uni063D", "uni063D.init", "uni063D.medi", "uni063D.fina",
-              "uni0763", "uni0763.init", "uni0763.medi", "uni0763.fina"]
-f.selection.none()
-for nm in new_glyphs:
-    if exists(nm):
-        f.selection.select(("more", None), nm)
-f.autoHint()
-f.selection.none()
+        waw = find_glyph(f, *WAW)
+        kaf = find_glyph(f, *KAF)
+        yeh = find_glyph(f, *YEH)
+        sources = {"waw": waw, "kaf": kaf, "yeh": yeh}
+        print(f"sources: و={waw}  ک={kaf}  ی={yeh}")
+        if not waw:
+            print("ERROR: the font has no و (U+0648) - not an Arabic-script font")
+            return 1
 
-f.save()
-print("saved SFD (glyphs done; GSUB rules added next)")
-f.close()
+        # ---- GSUB lookups: find or create fina / init / medi ----
+        subtables = {}
+        for feat in ("fina", "init", "medi"):
+            lk, st = find_arabic_lookup(f, feat)
+            if not st:
+                lk_name = "'%s' Terminal Forms (AZB)" % feat
+                f.addLookup(lk_name, "gsub_single", None,
+                            ((feat, (("arab", ("dflt",)),)),))
+                f.addLookupSubtable(lk_name, lk_name + " subtable")
+                st = lk_name + " subtable"
+                print(f"  created GSUB lookup: {lk_name}")
+            subtables[feat] = st
 
-# ---------- (re)write GSUB rules into the SFD text ----------
-# Non-connecting letters (ۆ ۇ) only ever get FINA in real shaping, so they
-# only need a fina rule. ؽ and ݣ are connecting and need all three.
-RULES = {
-    "uni06C6": [(FINASUB, "uniFBDA")],
-    "uni06C7": [(FINASUB, "uniFBD8")],
-    "uni063D": [(FINASUB, "uni063D.fina"), (INITSUB, "uni063D.init"), (MEDISUB, "uni063D.medi")],
-    "uni0763": [(FINASUB, "uni0763.fina"), (INITSUB, "uni0763.init"), (MEDISUB, "uni0763.medi")],
-}
+        # ---- build each letter ----
+        rules = {}
+        for spec in LETTERS:
+            base = glyph_by_cp(f, spec["cp"])
+            if not base and exists(f, spec["name"]):
+                base = spec["name"]
+            if not base:
+                f.createChar(spec["cp"], spec["name"])
+                got = copy_from(f, donor, spec["name"], sources[spec["src"]],
+                                spec["cp"])
+                if got == "donor" and spec["connecting"]:
+                    # scale donor base X to fit the mono width
+                    g = f[spec["name"]]
+                    bb = g.boundingBox()
+                    gw = bb[2] - bb[0]
+                    if gw > 0:
+                        sx = (width - 40) / gw
+                        dx = width / 2.0 - (bb[0] + bb[2]) / 2.0 * sx
+                        g.transform((sx, 0, 0, 1, dx, 0))
+                base = spec["name"]
+                print(f"  created {base} U+{spec['cp']:04X}"
+                      + (" (from donor)" if got == "donor" else ""))
+            g = f[base]
+            g.unicode = spec["cp"]
+            g.width = width
 
-with open(SRC, encoding="utf-8") as fh:
-    text = fh.read()
+            # contextual forms
+            if spec.get("connecting"):
+                role = spec["forms_src"]
+                for form in ("init", "medi", "fina"):
+                    fn = base + "." + form
+                    if not exists(f, fn):
+                        src_g = find_glyph(f, *FORMS_TABLE[role][form])
+                        if not src_g:
+                            src_g = sources[role] or sources["waw"]
+                        f.createChar(-1, fn)
+                        copy_outlines(f, fn, src_g)
+                        f[fn].width = width
+                        print(f"  created {fn} (unencoded)")
+                rules[base] = [(subtables["fina"], base + ".fina"),
+                               (subtables["init"], base + ".init"),
+                               (subtables["medi"], base + ".medi")]
+            else:
+                # standard presentation forms (isolated + final)
+                final_target = None
+                for fcp, fname in spec["forms"]:
+                    target = glyph_by_cp(f, fcp)
+                    if not target and exists(f, fname):
+                        target = fname
+                    if not target:
+                        f.createChar(fcp, fname)
+                        copy_outlines(f, fname, base)
+                        f[fname].width = width
+                        target = fname
+                        print(f"  created {fname} U+{fcp:04X}")
+                    else:
+                        f[target].unicode = fcp
+                        f[target].width = width
+                    final_target = target
+                rules[base] = [(subtables["fina"], final_target)]
 
-for gname, rls in RULES.items():
-    m = re.search(r"(StartChar: %s\n)(.*?)(\nEndChar)" % re.escape(gname), text, re.S)
-    if not m:
-        print(f"WARN: glyph block {gname} not found in SFD")
-        continue
-    body = re.sub(r"[ \t]*Substitution2: [^\n]*\n?", "", m.group(2))
-    to_add = [f'Substitution2: "{sub}" {tgt}' for sub, tgt in rls]
-    insert = "\n" + "\n".join(to_add) + "\n"
-    text = text[:m.start(2)] + body + insert + text[m.end(2):]
-    print(f"rewrote {len(to_add)} GSUB rules for {gname}")
+        # ---- force GDEF glyph class to BASE (see note below) ----
+        touched = []
+        for spec in LETTERS:
+            b = glyph_by_cp(f, spec["cp"]) or spec["name"]
+            touched.append(b)
+            if spec.get("connecting"):
+                touched += [b + ".init", b + ".medi", b + ".fina"]
+            else:
+                for fcp, fname in spec["forms"]:
+                    touched.append(glyph_by_cp(f, fcp) or fname)
+        for nm in touched:
+            if exists(f, nm):
+                try:
+                    f[nm].glyphclass = "baseglyph"
+                except Exception:
+                    pass
 
-with open(SRC, "w", encoding="utf-8") as fh:
-    fh.write(text)
+        f.save(work)
+        f.close()
 
-# ---------- regenerate the TTF from the finished SFD ----------
-f = fontforge.open(SRC)
-f.generate(OUT)
-print(f"generated {OUT}")
-f.close()
+        # ---- write GSUB rules into the SFD text ----
+        with open(work, encoding="utf-8") as fh:
+            text = fh.read()
+        for gname, rls in rules.items():
+            m = re.search(r"(StartChar: %s\n)(.*?)(\nEndChar)"
+                          % re.escape(gname), text, re.S)
+            if not m:
+                print(f"  ! glyph block {gname} not found in SFD")
+                continue
+            body = re.sub(r"[ \t]*Substitution2: [^\n]*\n?", "", m.group(2))
+            to_add = ['Substitution2: "%s" %s' % (sub, tgt) for sub, tgt in rls]
+            insert = "\n" + "\n".join(to_add) + "\n"
+            text = text[:m.start(2)] + body + insert + text[m.end(2):]
+            print(f"  GSUB {gname}: {len(to_add)} rule(s)")
+        with open(work, "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+        # ---- regenerate in the requested format ----
+        f = fontforge.open(work)
+        f.generate(out)
+        f.close()
+        print(f"generated {out}")
+        return 0
+    finally:
+        if donor:
+            donor.close()
+        if os.path.exists(work):
+            os.unlink(work)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
