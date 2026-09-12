@@ -8,4 +8,6 @@ A Azerbaijani (azb) Font Family, Originally made by **Saber Rastikerdar**
 - خاقان قارانقوش (Regular آغؽرلیغی‌نین 0.1 یازؽمی حاضیر - دئنه‌مه سۆرجینده)
 
 ![Xaqan-Code](screenshot.png)
+![Xaqan-Code](Xaqan-Code.jpg)
 ![Xaqan-Qaranqus](Xaqan-Qaranqus.jpg)
+![Xaqan-Qaranqus-Bold](Xaqan-Qaranqus-Bold.jpg)
