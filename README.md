@@ -10,5 +10,5 @@ A Azerbaijani (azb) Font Family, Originally made by **Saber Rastikerdar**
 
 ![Xaqan-Code](screenshot.png)
 ![Xaqan-Code](Xaqan-Code.jpg)
-![Xaqan-Qaranqus](Xaqan-Qaranqus.jpg)
-![Xaqan-Qaranqus-Bold](Xaqan-Qaranqus-Bold.jpg)
+![Xaqan-Qaranqush](Xaqan-Qaranqush.jpg)
+![Xaqan-Qaranqush-Bold](Xaqan-Qaranqush-Bold.jpg)

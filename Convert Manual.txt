@@ -1,1 +1,1 @@
-fontforge -lang=py -script add_azb_chars_regular.py Parastoo.ttf Xaqan-Qaranqus.ttf
+fontforge -lang=py -script Scripts/xaqan-azb-2.py Shabnam.ttf Bagsira.ttf
